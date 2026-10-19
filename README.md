@@ -132,13 +132,24 @@ When deactivated, the event filter is fully removed from `QApplication` — zero
 
 ## Configuration
 
-Edit the constants at the top of the plugin file:
+Edit the defaults in `ZoomConfig` and `OverlayConfig` near the top of the plugin file. Main settings are shown below:
 
-```python
-MIN_FONT_SIZE = 6       # smallest allowed font (points)
-MAX_FONT_SIZE = 40      # largest allowed font (points)
-ZOOM_STEP = 1           # points per scroll notch
-DEFAULT_FONT_SIZE = 10  # fallback if font size can't be read
+```pythonы
+@dataclass(frozen=True)
+class ZoomConfig:
+    min_font_size: int = 6       # minimum font size (points)
+    max_font_size: int = 40      # maximum font size (points)
+    default_font_size: int = 10  # fallback and reference for 100% zoom
+    step: int = 1                # points per scroll notch
+
+
+@dataclass(frozen=True)
+class OverlayConfig:
+    hold_seconds: float = 1.0   # time before fading
+    fade_seconds: float = 0.85  # fade duration
+    font_size: int = 13         # maximum badge font size (points)
+    width: int = 100            # maximum badge width (logical pixels)
+    height: int = 44            # maximum badge height (logical pixels)
 ```
 
 ---
