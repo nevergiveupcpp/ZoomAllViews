@@ -11,6 +11,7 @@ __author__ = "Jiri Vinopal (@Dump-GUY)"
 __version__ = "1.0.1"
 
 import time
+from dataclasses import dataclass
 
 import ida_idaapi
 import ida_kernwin
@@ -86,22 +87,43 @@ except ImportError:
 # Configuration
 # -----------------------------------------------------------------------
 
-MIN_FONT_SIZE = 6
-MAX_FONT_SIZE = 40
-ZOOM_STEP = 1
-DEFAULT_FONT_SIZE = 10
 SIZE_PROP = "_zav_size"
-
 PLUGIN_NAME = "ZoomAllViews"
 PLUGIN_HOTKEY = "Ctrl-Shift-Z"
 
-OVERLAY_HOLD_SECONDS = 1.0
-OVERLAY_FADE_SECONDS = 0.85
-OVERLAY_TICK_MS = 33
-OVERLAY_TOP_PADDING = 15
-OVERLAY_RIGHT_PADDING = 15
-OVERLAY_WIDTH = 100
-OVERLAY_HEIGHT = 44
+
+@dataclass(frozen=True)
+class ZoomConfig:
+    min_font_size: int = 6
+    max_font_size: int = 40
+    default_font_size: int = 10
+    step: int = 1
+    row_extra_height: int = 6
+
+
+@dataclass(frozen=True)
+class OverlayConfig:
+    hold_seconds: float = 1.0
+    fade_seconds: float = 0.85
+    tick_ms: int = 33
+
+    reference_width: int = 1920
+    reference_height: int = 1080
+
+    width: int = 100
+    height: int = 44
+    font_size: int = 13
+    font_bold: bool = True
+    top_padding: int = 15
+    right_padding: int = 15
+    radius: int = 8
+
+    background_alpha: int = 220
+    border_alpha: int = 70
+
+
+zoom_config = ZoomConfig()
+overlay_config = OverlayConfig()
 
 
 # -----------------------------------------------------------------------
@@ -151,7 +173,7 @@ def _apply_zoom(widget, size):
     """Apply font size via setFont + setStyleSheet + row-height fixups."""
     font = widget.font()
     font.setPointSize(size)
-    row_h = QFontMetrics(font).height() + 6
+    row_h = QFontMetrics(font).height() + zoom_config.row_extra_height
 
     widget.setFont(font)
     vp = widget.viewport()
@@ -182,7 +204,7 @@ def _apply_zoom(widget, size):
 
 
 def _zoom_percent(size):
-    return int(round((size / DEFAULT_FONT_SIZE) * 100))
+    return int(round((size / zoom_config.default_font_size) * 100))
 
 class ZoomBadge(QWidget):
     """Holds badge widget state"""
@@ -195,17 +217,40 @@ class ZoomBadge(QWidget):
         self._hold_timer.setSingleShot(True)
         self._hold_timer.timeout.connect(self._start_fade)
         self._timer = QTimer(self)
-        self._timer.setInterval(OVERLAY_TICK_MS)
+        self._timer.setInterval(overlay_config.tick_ms)
         self._timer.timeout.connect(self._tick)
         self._bg, self._fg, self._border = self._overlay_colors()
         self._font = QFont()
-        self._font.setPointSize(13)
-        self._font.setBold(True)
+        self._font.setBold(overlay_config.font_bold)
 
         self.setAttribute(WA_TRANSPARENT_FOR_MOUSE, True)
         self.setAttribute(WA_TRANSLUCENT_BACKGROUND, True)
-        self.resize(OVERLAY_WIDTH, OVERLAY_HEIGHT)
+
+        window = parent.window().windowHandle()
+
+        if window is not None and _qt_is_valid(window):
+            screen = window.screen()
+            window.screenChanged.connect(self._update_metrics)
+        else:
+            screen = QApplication.primaryScreen()
+
+        self._update_metrics(screen)
         self.hide()
+
+    def _update_metrics(self, screen):
+        scale = 1.0
+        if screen is not None and _qt_is_valid(screen):
+            size = screen.size()
+            scale = min(1.0, size.width() / overlay_config.reference_width,
+                        size.height() / overlay_config.reference_height)
+
+        self._font.setPointSizeF(overlay_config.font_size * scale)
+        self._top_padding = round(overlay_config.top_padding * scale)
+        self._right_padding = round(overlay_config.right_padding * scale)
+        self._radius = overlay_config.radius * scale
+        self.resize(round(overlay_config.width * scale), round(overlay_config.height * scale))
+        self._place()
+        self.update()
 
     def show_zoom(self, timestamp: float, zoom_percent: int):
         self._timestamp = timestamp
@@ -221,7 +266,7 @@ class ZoomBadge(QWidget):
         self.show()
         self.raise_()
         self.update()
-        self._hold_timer.start(int(OVERLAY_HOLD_SECONDS * 1000))
+        self._hold_timer.start(int(overlay_config.hold_seconds * 1000))
 
     def _start_fade(self):
         if not self.isVisible():
@@ -239,10 +284,10 @@ class ZoomBadge(QWidget):
 
     def paintEvent(self, event):
         age = time.monotonic() - self._timestamp
-        if age <= OVERLAY_HOLD_SECONDS:
+        if age <= overlay_config.hold_seconds:
             alpha = 1.0
         else:
-            alpha = max(0.0, 1.0 - ((age - OVERLAY_HOLD_SECONDS) / OVERLAY_FADE_SECONDS))
+            alpha = max(0.0, 1.0 - ((age - overlay_config.hold_seconds) / overlay_config.fade_seconds))
 
         painter = QPainter(self)
         painter.setRenderHint(ANTIALIASING, True)
@@ -250,7 +295,8 @@ class ZoomBadge(QWidget):
 
         painter.setPen(self._border)
         painter.setBrush(self._bg)
-        painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1), 8, 8)
+        painter.drawRoundedRect(self.rect().adjusted(0, 0, -1, -1),
+                                self._radius, self._radius)
 
         painter.setFont(self._font)
         painter.setPen(self._fg)
@@ -262,8 +308,8 @@ class ZoomBadge(QWidget):
         if parent is None or not _qt_is_valid(parent):
             return
 
-        x = max(0, parent.width() - self.width() - OVERLAY_RIGHT_PADDING)
-        y = max(0, min(OVERLAY_TOP_PADDING, parent.height() - self.height()))
+        x = max(0, parent.width() - self.width() - self._right_padding)
+        y = max(0, min(self._top_padding, parent.height() - self.height()))
         self.move(x, y)
 
 
@@ -277,15 +323,15 @@ class ZoomBadge(QWidget):
         bg = QColor(palette.color(OVERLAY_BASE))
         fg = QColor(palette.color(OVERLAY_TEXT))
 
-        bg.setAlpha(220)
+        bg.setAlpha(overlay_config.background_alpha)
         fg.setAlpha(255)
         border = QColor(fg)
-        border.setAlpha(70)
+        border.setAlpha(overlay_config.border_alpha)
         return bg, fg, border
 
     @staticmethod
     def _lifetime() -> float:
-        return OVERLAY_HOLD_SECONDS + OVERLAY_FADE_SECONDS
+        return overlay_config.hold_seconds + overlay_config.fade_seconds
 
 
 class ZoomOverlay:
@@ -362,10 +408,10 @@ class WheelZoomFilter(QObject):
         cur = view.property(SIZE_PROP)
         if not isinstance(cur, int) or cur <= 0:
             ps = view.font().pointSize()
-            cur = ps if ps > 0 else DEFAULT_FONT_SIZE
+            cur = ps if ps > 0 else zoom_config.default_font_size
 
-        new = max(MIN_FONT_SIZE, min(MAX_FONT_SIZE,
-                  cur + (ZOOM_STEP if delta > 0 else -ZOOM_STEP)))
+        new = max(zoom_config.min_font_size, min(zoom_config.max_font_size,
+                  cur + (zoom_config.step if delta > 0 else -zoom_config.step)))
         if new == cur:
             self._overlay.add(view, time.monotonic(), cur)
             return True
